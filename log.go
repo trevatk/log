@@ -1,6 +1,7 @@
 package log
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -11,9 +12,21 @@ import (
 )
 
 // Level
-type Level int
+type (
+	Level int
 
-type color string
+	color string
+
+	entry struct {
+		Name       string `json:"name,omitempty"`
+		Level      string `json:"level"`
+		Caller     string `json:"caller,omitempty"`
+		Message    string `json:"msg,omitempty"`
+		Fields     []any  `json:"fields,omitempty"`
+		Stacktrace string `json:"stacktrace,omitempty"`
+		Timestamp  string `json:"timestamp"`
+	}
+)
 
 const (
 	// DEBUG
@@ -108,6 +121,20 @@ func WithLevel(level string) LoggerOption {
 	}
 }
 
+// WithCaller
+func WithCaller(includeCaller bool) LoggerOption {
+	return func(l *Logger) {
+		l.includeCaller = includeCaller
+	}
+}
+
+// WithStacktrace
+func WithStacktrace(stacktrace bool) LoggerOption {
+	return func(l *Logger) {
+		l.stacktrace = stacktrace
+	}
+}
+
 // Logger
 type Logger struct {
 	mu sync.Mutex
@@ -116,6 +143,9 @@ type Logger struct {
 	minLevel Level
 
 	name string
+
+	includeCaller bool
+	stacktrace    bool
 }
 
 // New
@@ -137,7 +167,7 @@ func (l *Logger) Debug(format string) {
 }
 
 // Debugf
-func (l *Logger) Debugf(format string, args ...interface{}) {
+func (l *Logger) Debugf(format string, args ...any) {
 	l.logMsg(DEBUG, format, args...)
 }
 
@@ -147,7 +177,7 @@ func (l *Logger) Info(format string) {
 }
 
 // Infof
-func (l *Logger) Infof(format string, args ...interface{}) {
+func (l *Logger) Infof(format string, args ...any) {
 	l.logMsg(INFO, format, args...)
 }
 
@@ -157,7 +187,7 @@ func (l *Logger) Warn(format string) {
 }
 
 // Warnf
-func (l *Logger) Warnf(format string, args ...interface{}) {
+func (l *Logger) Warnf(format string, args ...any) {
 	l.logMsg(WARN, format, args...)
 }
 
@@ -167,7 +197,7 @@ func (l *Logger) Error(format string) {
 }
 
 // Errorf
-func (l *Logger) Errorf(format string, args ...interface{}) {
+func (l *Logger) Errorf(format string, args ...any) {
 	l.logMsg(ERROR, format, args...)
 }
 
@@ -177,11 +207,11 @@ func (l *Logger) Fatal(format string) {
 }
 
 // Fatalf
-func (l *Logger) Fatalf(format string, args ...interface{}) {
+func (l *Logger) Fatalf(format string, args ...any) {
 	l.logMsg(FATAL, format, args...)
 }
 
-func (l *Logger) logMsg(level Level, format string, args ...interface{}) {
+func (l *Logger) logMsg(level Level, format string, args ...any) {
 	// level is greater than min
 	if l.minLevel > level {
 		return
@@ -190,10 +220,16 @@ func (l *Logger) logMsg(level Level, format string, args ...interface{}) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	fmsg := l.fmt(level, format, args...)
-	_, err := l.w.Write([]byte(fmsg))
+	logEntry := l.fmt(level, format, args...)
+	entrybytes, err := json.Marshal(&logEntry)
 	if err != nil {
-		fmt.Fprintf(l.w, "failed to write to out: %v", err)
+		fmt.Fprintf(l.w, "failed to marshal message %v original message %s", err, format) // nolint: errcheck
+	}
+
+	entrybytes = append(entrybytes, '\n')
+	_, err = l.w.Write(entrybytes)
+	if err != nil {
+		fmt.Fprintf(l.w, "failed to write to out: %v", err) // nolint: errcheck
 	}
 
 	if level == FATAL {
@@ -201,24 +237,25 @@ func (l *Logger) logMsg(level Level, format string, args ...interface{}) {
 	}
 }
 
-func (l *Logger) fmt(level Level, format string, args ...interface{}) string {
+func (l *Logger) fmt(level Level, format string, args ...any) entry {
 	ts := time.Now().Format("2006-01-02 15:04:05")
-	msg := fmt.Sprintf(format, args...)
 
-	var clr color
+	var en entry
+	en.Level = level.string()
+	en.Message = format
+	en.Fields = make([]any, 0, len(args))
+	en.Name = l.name
+	en.Timestamp = ts
 
-	if l.w == os.Stdout || l.w == os.Stdin {
-		clr = colorFromLevel(level)
+	for _, arg := range args {
+		en.Fields = append(en.Fields, arg)
+		if level == ERROR || level == FATAL {
+			if l.stacktrace {
+				stacktrace := debug.Stack()
+				en.Stacktrace = fmt.Sprintf(" %sstracktrace %s%s", colorFromLevel(level), colorReset, string(stacktrace))
+			}
+		}
 	}
 
-	lmsg := fmt.Sprintf("%s%s [%s%s%s] %s %s", clr, ts, colorFromLevel(level), level.string(), colorReset, l.name, msg)
-
-	if level == ERROR || level == FATAL {
-		stacktrace := debug.Stack()
-		lmsg += fmt.Sprintf(" %sstracktrace %s%s", colorFromLevel(level), colorReset, string(stacktrace))
-	}
-
-	lmsg += "\n"
-
-	return lmsg
+	return en
 }

@@ -14,13 +14,13 @@ func TestDebug(t *testing.T) {
 	opts := []log.LoggerOption{
 		log.WithLevel("DEBUG"),
 		log.WithName("unit_test"),
+		log.WithStacktrace(true),
 		log.WithWriter(&buf),
 	}
 
 	logger := log.New(opts...)
 
-	logger.Debug("unformatted")
-	logger.Debugf("%d", 1)
+	logger.Debugf("unformatted", log.Arg("counter", 1))
 
 	if buf.Len() == 0 {
 		t.Fatal("buffer length is empty")
@@ -92,6 +92,7 @@ func TestError(t *testing.T) {
 	opts := []log.LoggerOption{
 		log.WithLevel("ERROR"),
 		log.WithName("unit_test"),
+		log.WithStacktrace(true),
 		log.WithWriter(&buf),
 	}
 
